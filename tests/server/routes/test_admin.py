@@ -1,5 +1,8 @@
 import hashlib
 import json
+import os
+import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -13,6 +16,7 @@ from supernote.client.client import Client
 from supernote.models.base import ProcessingStatus
 from supernote.models.user import UserRegisterDTO
 from supernote.server.config import ServerConfig
+from supernote.server.constants import USER_DATA_BUCKET
 from supernote.server.db.models.file import RecycleFileDO, UserFileDO
 from supernote.server.db.models.note_processing import SystemTaskDO
 from supernote.server.db.models.summary import SummaryDO
@@ -21,7 +25,7 @@ from supernote.server.db.session import DatabaseSessionManager
 from supernote.server.services.coordination import CoordinationService
 from supernote.server.services.user import JWT_ALGORITHM, UserService
 from supernote.server.services.vfs import VirtualFileSystem
-from supernote.server.utils.paths import get_hermes_summary_id
+from supernote.server.utils.paths import get_file_chunk_path, get_hermes_summary_id
 
 
 @pytest.fixture
@@ -551,6 +555,69 @@ async def test_admin_recycle_bin_cleanup_run_permission(
     await setup_users(session_manager, coordination_service, server_config)
 
     path = "/api/admin/recycle-bin/cleanup/run"
+
+    resp = await client.post(path)
+    assert resp.status == 401
+
+    resp = await client.post(path, headers=user_headers)
+    assert resp.status == 403
+
+
+async def test_admin_temp_cleanup_run_removes_orphaned_files(
+    client: TestClient,
+    session_manager: DatabaseSessionManager,
+    coordination_service: CoordinationService,
+    server_config: ServerConfig,
+    storage_root: Path,
+    admin_headers: dict[str, str],
+) -> None:
+    """The manual temp-cleanup trigger removes only stale orphaned files."""
+    await setup_users(session_manager, coordination_service, server_config)
+
+    old_time = time.time() - (server_config.temp_cleanup_ttl_seconds + 60)
+
+    # An orphaned blob-write staging file, old enough to be abandoned.
+    temp_dir = storage_root / "temp"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    orphan_tmp = temp_dir / "orphaned.tmp"
+    orphan_tmp.write_bytes(b"partial write")
+    os.utime(orphan_tmp, (old_time, old_time))
+
+    # An abandoned upload chunk, also old enough.
+    chunk_key = get_file_chunk_path("some-inner-name", 1)
+    chunk_path = storage_root / USER_DATA_BUCKET / chunk_key[:2] / chunk_key
+    chunk_path.parent.mkdir(parents=True, exist_ok=True)
+    chunk_path.write_bytes(b"abandoned chunk")
+    os.utime(chunk_path, (old_time, old_time))
+
+    # A fresh temp file that must be left alone.
+    fresh_tmp = temp_dir / "fresh.tmp"
+    fresh_tmp.write_bytes(b"still writing")
+
+    resp = await client.post("/api/admin/temp-cleanup/run", headers=admin_headers)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["tmpFilesRemoved"] == 1
+    assert data["chunkFilesRemoved"] == 1
+    assert data["bytesFreed"] == len(b"partial write") + len(b"abandoned chunk")
+
+    assert not orphan_tmp.exists()
+    assert not chunk_path.exists()
+    assert fresh_tmp.exists()
+
+
+async def test_admin_temp_cleanup_run_permission(
+    client: TestClient,
+    session_manager: DatabaseSessionManager,
+    coordination_service: CoordinationService,
+    server_config: ServerConfig,
+    admin_headers: dict[str, str],
+    user_headers: dict[str, str],
+) -> None:
+    """Access control matches other admin routes: 401 anon, 403 non-admin."""
+    await setup_users(session_manager, coordination_service, server_config)
+
+    path = "/api/admin/temp-cleanup/run"
 
     resp = await client.post(path)
     assert resp.status == 401

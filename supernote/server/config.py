@@ -243,6 +243,32 @@ BaseConfig
     Env Var: `SUPERNOTE_RECYCLE_BIN_CLEANUP_INTERVAL_SECONDS`
     """
 
+    temp_cleanup_enabled: bool = True
+    """Whether the scheduled temp storage cleanup job is enabled.
+
+    When enabled, orphaned blob-write staging files (`<storage_dir>/temp/*.tmp`)
+    and abandoned chunked-upload parts (`*.part.<n>`) older than
+    `temp_cleanup_ttl_seconds` are deleted automatically.
+
+    Env Var: `SUPERNOTE_TEMP_CLEANUP_ENABLED`
+    """
+
+    temp_cleanup_ttl_seconds: int = 86400
+    """How old (in seconds) an orphaned temp staging file or upload chunk
+    must be before the scheduled cleanup job considers it abandoned and
+    deletes it. Operator-defined; the default of 24 hours comfortably
+    exceeds how long any single write or upload should legitimately take.
+
+    Env Var: `SUPERNOTE_TEMP_CLEANUP_TTL_SECONDS`
+    """
+
+    temp_cleanup_interval_seconds: int = 3600
+    """How often, in seconds, the temp storage cleanup job runs. Defaults to
+    once an hour.
+
+    Env Var: `SUPERNOTE_TEMP_CLEANUP_INTERVAL_SECONDS`
+    """
+
     @property
     def configured_base_url(self) -> str | None:
         """Get the explicitly configured base URL, or None if unset.
@@ -525,6 +551,37 @@ BaseConfig
                 logger.info(
                     "Using SUPERNOTE_RECYCLE_BIN_CLEANUP_INTERVAL_SECONDS: "
                     f"{config.recycle_bin_cleanup_interval_seconds}"
+                )
+            except ValueError:
+                pass
+
+        if os.getenv("SUPERNOTE_TEMP_CLEANUP_ENABLED"):
+            config.temp_cleanup_enabled = _get_bool_env(
+                "SUPERNOTE_TEMP_CLEANUP_ENABLED",
+                config.temp_cleanup_enabled,
+            )
+            logger.info(f"Temp Cleanup Enabled: {config.temp_cleanup_enabled}")
+
+        if temp_cleanup_ttl_seconds := os.getenv("SUPERNOTE_TEMP_CLEANUP_TTL_SECONDS"):
+            try:
+                config.temp_cleanup_ttl_seconds = int(temp_cleanup_ttl_seconds)
+                logger.info(
+                    "Using SUPERNOTE_TEMP_CLEANUP_TTL_SECONDS: "
+                    f"{config.temp_cleanup_ttl_seconds}"
+                )
+            except ValueError:
+                pass
+
+        if temp_cleanup_interval_seconds := os.getenv(
+            "SUPERNOTE_TEMP_CLEANUP_INTERVAL_SECONDS"
+        ):
+            try:
+                config.temp_cleanup_interval_seconds = int(
+                    temp_cleanup_interval_seconds
+                )
+                logger.info(
+                    "Using SUPERNOTE_TEMP_CLEANUP_INTERVAL_SECONDS: "
+                    f"{config.temp_cleanup_interval_seconds}"
                 )
             except ValueError:
                 pass
