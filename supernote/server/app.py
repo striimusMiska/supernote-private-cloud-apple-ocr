@@ -60,6 +60,7 @@ from .services.processor_modules.summary import SummaryModule
 from .services.schedule import ScheduleService
 from .services.search import SearchService
 from .services.summary import SummaryService
+from .services.temp_cleanup import TempStorageCleanupService
 from .services.user import UserService
 from .socket import setup_socketio
 from .utils.hashing import get_md5_hash
@@ -411,6 +412,14 @@ def create_app(config: ServerConfig) -> web.Application:
     )
     app["recycle_bin_cleanup_service"] = recycle_bin_cleanup_service
 
+    temp_cleanup_service = TempStorageCleanupService(
+        file_service,
+        ttl_seconds=config.temp_cleanup_ttl_seconds,
+        interval_seconds=config.temp_cleanup_interval_seconds,
+        enabled=config.temp_cleanup_enabled,
+    )
+    app["temp_cleanup_service"] = temp_cleanup_service
+
     # Register modules
     processor_service.register_modules(
         hashing=PageHashingModule(file_service=file_service),
@@ -525,6 +534,7 @@ def create_app(config: ServerConfig) -> web.Application:
         logger.info("Starting background services...")
         await processor_service.start()
         await recycle_bin_cleanup_service.start()
+        await temp_cleanup_service.start()
         logger.info("Startup sequence complete.")
 
         app["mcp_task"] = mcp_task
@@ -541,6 +551,7 @@ def create_app(config: ServerConfig) -> web.Application:
 
         await processor_service.stop()
         await recycle_bin_cleanup_service.stop()
+        await temp_cleanup_service.stop()
         await session_manager.close()
 
     app.on_shutdown.append(on_shutdown_handler)
