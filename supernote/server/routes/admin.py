@@ -16,6 +16,7 @@ from supernote.models.extended import (
     OrphanCleanupRunVO,
     RecycleBinCleanupRunVO,
     SystemTaskVO,
+    TempCleanupRunVO,
 )
 from supernote.models.summary import UpdateSummaryDTO
 from supernote.models.system import QueueStatusVO
@@ -260,6 +261,26 @@ async def handle_orphan_cleanup_run(request: web.Request) -> web.Response:
             source_blobs_removed=stats.source_blobs_removed,
             stale_files_found=stats.stale_files_found,
             stale_folders_found=stats.stale_folders_found,
+        ).to_dict()
+    )
+
+
+@routes.post("/api/admin/temp-cleanup/run")
+@require_admin
+async def handle_temp_cleanup_run(request: web.Request) -> web.Response:
+    """Manually run the temp storage cleanup job now (Admin only).
+
+    Deletes orphaned blob-write staging files (`*.tmp`) and abandoned
+    chunked-upload parts (`*.part.<n>`) older than the configured TTL
+    immediately, rather than waiting for the next scheduled run.
+    """
+    temp_cleanup_service = request.app["temp_cleanup_service"]
+    result = await temp_cleanup_service.run_once()
+    return web.json_response(
+        TempCleanupRunVO(
+            tmp_files_removed=result.tmp_files_removed,
+            chunk_files_removed=result.chunk_files_removed,
+            bytes_freed=result.bytes_freed,
         ).to_dict()
     )
 

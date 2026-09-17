@@ -117,6 +117,29 @@ ORPHAN_CLEANUP_DURATION_SECONDS: Histogram = Histogram(
     "Latency of orphan cleanup job runs in seconds.",
 )
 
+# Temp storage cleanup metrics
+TEMP_CLEANUP_RUNS_TOTAL: Counter = Counter(
+    "supernote_temp_cleanup_runs_total",
+    "Total number of scheduled temp storage cleanup job runs.",
+    ["status"],
+)
+
+TEMP_CLEANUP_FILES_REMOVED_TOTAL: Counter = Counter(
+    "supernote_temp_cleanup_files_removed_total",
+    "Total number of orphaned files removed by the temp storage cleanup job.",
+    ["kind"],
+)
+
+TEMP_CLEANUP_BYTES_FREED_TOTAL: Counter = Counter(
+    "supernote_temp_cleanup_bytes_freed_total",
+    "Total number of bytes freed by the temp storage cleanup job.",
+)
+
+TEMP_CLEANUP_DURATION_SECONDS: Histogram = Histogram(
+    "supernote_temp_cleanup_duration_seconds",
+    "Latency of temp storage cleanup job runs in seconds.",
+)
+
 # Database metrics
 DB_SESSIONS_ACTIVE: Gauge = Gauge(
     "supernote_db_sessions_active",

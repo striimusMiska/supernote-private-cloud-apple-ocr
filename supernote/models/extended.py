@@ -182,6 +182,30 @@ class OrphanCleanupRunVO(BaseResponse):
         serialize_by_alias = True
 
 
+@dataclass(kw_only=True)
+class TempCleanupRunVO(BaseResponse):
+    """Response VO for the admin manual temp storage cleanup trigger endpoint.
+
+    Used by: POST /api/admin/temp-cleanup/run
+    """
+
+    tmp_files_removed: int = field(
+        metadata=field_options(alias="tmpFilesRemoved"), default=0
+    )
+    """Number of orphaned `.tmp` blob-staging files removed by this run."""
+
+    chunk_files_removed: int = field(
+        metadata=field_options(alias="chunkFilesRemoved"), default=0
+    )
+    """Number of orphaned upload chunk (`*.part.<n>`) blobs removed by this run."""
+
+    bytes_freed: int = field(metadata=field_options(alias="bytesFreed"), default=0)
+    """Total bytes freed by this run."""
+
+    class Config(BaseConfig):
+        serialize_by_alias = True
+
+
 @dataclass
 class FileProcessingStatusDTO(DataClassJSONMixin):
     """Request model for querying processing status of files.
