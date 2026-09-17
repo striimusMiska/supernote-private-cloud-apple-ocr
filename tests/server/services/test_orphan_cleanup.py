@@ -329,6 +329,64 @@ async def test_cleanup_keeps_blob_shared_with_an_active_copy(
         ).scalar_one_or_none() is not None
 
 
+async def test_cleanup_counts_shared_blob_once_when_both_copies_are_stale(
+    orphan_cleanup_service: OrphanCleanupService,
+    session_manager: DatabaseSessionManager,
+    blob_storage: BlobStorage,
+    create_test_user: None,
+    test_user_id: int,
+) -> None:
+    """Regression test: when two *independently stale* rows share the same
+    `storage_key` (e.g. two copies, both later soft-deleted) and both are
+    past retention in the same run, the shared blob must be deleted -- and
+    counted -- exactly once, not once per row.
+
+    Before the fix, each row's "is this key still referenced elsewhere"
+    check excluded the *entire eligible batch* (including the other stale
+    copy), so both rows independently concluded "no" and both called
+    `blob_storage.delete()` / incremented `source_blobs_removed`.
+    """
+    shared_key = "shared-orphan-key-both-stale"
+    await blob_storage.put(USER_DATA_BUCKET, shared_key, b"shared bytes")
+
+    async with session_manager.session() as session:
+        vfs = VirtualFileSystem(session)
+        copy_a = await vfs.create_or_update_file(
+            test_user_id, 0, "copy-a.note", size=10, md5="h", storage_key=shared_key
+        )
+        copy_b = await vfs.create_or_update_file(
+            test_user_id, 0, "copy-b.note", size=10, md5="h", storage_key=shared_key
+        )
+        copy_a_id = copy_a.id
+        copy_b_id = copy_b.id
+
+    async with session_manager.session() as session:
+        result = await session.execute(
+            select(UserFileDO).where(UserFileDO.id.in_([copy_a_id, copy_b_id]))
+        )
+        stale_since = int(time.time() * 1000) - (31 * ONE_DAY_MS)
+        for node in result.scalars().all():
+            node.is_active = "N"
+            node.update_time = stale_since
+        await session.commit()
+
+    delete_spy = AsyncMock(wraps=blob_storage.delete)
+    with patch.object(blob_storage, "delete", delete_spy):
+        stats = await orphan_cleanup_service.run_once()
+
+    assert stats.files_removed == 2
+    assert stats.source_blobs_removed == 1
+
+    shared_key_delete_calls = [
+        call
+        for call in delete_spy.await_args_list
+        if call.args == (USER_DATA_BUCKET, shared_key)
+    ]
+    assert len(shared_key_delete_calls) == 1
+
+    assert await blob_storage.exists(USER_DATA_BUCKET, shared_key) is False
+
+
 def _mock_session_manager() -> AsyncMock:
     return AsyncMock()
 

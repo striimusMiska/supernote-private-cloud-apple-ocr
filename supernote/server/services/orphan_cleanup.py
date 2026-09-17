@@ -231,7 +231,19 @@ class OrphanCleanupService:
             eligible_folders = [n for n in eligible if n.is_folder == "Y"]
 
             for node in eligible_files:
-                await self._remove_stale_file(session, node, eligible_ids, stats)
+                await self._remove_stale_file(session, node, stats)
+
+            # Deleting source blobs is handled as a separate, batch-deduped
+            # pass (rather than inline per-node in `_remove_stale_file`)
+            # because two or more eligible files can share the same
+            # `storage_key` (e.g. copies) -- without deduping first, each
+            # row's "is this key still referenced by anything else" check
+            # would (correctly) exclude the *other* stale row too and each
+            # would independently decide "no" and both delete/count the same
+            # physical blob.
+            await self._remove_orphaned_source_blobs(
+                session, eligible_files, eligible_ids, stats
+            )
 
             for node in eligible_folders:
                 await session.delete(node)
@@ -245,10 +257,11 @@ class OrphanCleanupService:
         self,
         session: AsyncSession,
         node: UserFileDO,
-        eligible_ids: set[int],
         stats: OrphanCleanupStats,
     ) -> None:
-        """Delete derived data, blobs, and the row itself for one stale file."""
+        """Delete derived data, cached PNGs, and the row itself for one stale
+        file. Source blob deletion is handled separately, in a
+        batch-deduped pass -- see `_remove_orphaned_source_blobs`."""
         # Count via a SELECT first (rather than relying on the DELETE
         # statement's `rowcount`, which some async DB-API drivers/stub
         # signatures don't expose reliably) so the returned stats are exact.
@@ -288,7 +301,30 @@ class OrphanCleanupService:
                     f"Failed to delete cached PNG for {node.id} page {page_id}: {e}"
                 )
 
-        if node.storage_key:
+        await session.delete(node)
+        stats.files_removed += 1
+
+    async def _remove_orphaned_source_blobs(
+        self,
+        session: AsyncSession,
+        eligible_files: list[UserFileDO],
+        eligible_ids: set[int],
+        stats: OrphanCleanupStats,
+    ) -> None:
+        """Delete each unique source blob referenced by the eligible batch.
+
+        Two or more eligible files can share the same `storage_key` (e.g. a
+        copy made via `copy_node`, which reuses the source's key rather than
+        duplicating the blob). Dedupe by `storage_key` first so a shared
+        blob is deleted -- and counted -- at most once per run, regardless
+        of how many stale rows reference it.
+        """
+        seen_keys: set[str] = set()
+        for node in eligible_files:
+            if not node.storage_key or node.storage_key in seen_keys:
+                continue
+            seen_keys.add(node.storage_key)
+
             still_referenced_stmt = (
                 select(UserFileDO.id)
                 .where(
@@ -298,18 +334,19 @@ class OrphanCleanupService:
                 .limit(1)
             )
             still_referenced = await session.execute(still_referenced_stmt)
-            if still_referenced.first() is None:
-                try:
-                    await self.blob_storage.delete(USER_DATA_BUCKET, node.storage_key)
-                    stats.source_blobs_removed += 1
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to delete source blob for {node.id} "
-                        f"({node.storage_key}): {e}"
-                    )
+            if still_referenced.first() is not None:
+                # Another (non-stale, or not-yet-eligible) row still
+                # references this blob.
+                continue
 
-        await session.delete(node)
-        stats.files_removed += 1
+            try:
+                await self.blob_storage.delete(USER_DATA_BUCKET, node.storage_key)
+                stats.source_blobs_removed += 1
+            except Exception as e:
+                logger.warning(
+                    f"Failed to delete source blob for {node.id} "
+                    f"({node.storage_key}): {e}"
+                )
 
 
 def _stale_since_ms(node: UserFileDO, nodes_by_id: dict[int, UserFileDO]) -> int:
