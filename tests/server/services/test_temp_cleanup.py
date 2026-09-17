@@ -95,6 +95,75 @@ async def test_removes_orphaned_chunk_blob_older_than_ttl(tmp_path: Path) -> Non
     assert not chunk_path.exists()
 
 
+async def test_slow_chunked_upload_survives_ttl_if_still_progressing(
+    tmp_path: Path,
+) -> None:
+    """Regression test for #20.
+
+    A chunked upload spanning longer than the cleanup TTL, but making steady
+    (if slow) progress, must not have its early chunks reaped out from under
+    it -- that would leave `combined_stream()` unable to find them once the
+    final chunk arrives, aborting the merge with a 500.
+    """
+    file_service = _make_file_service(tmp_path)
+
+    object_name = "multi-day-sync-name"
+    chunk_paths = []
+    for part_number in (1, 2, 3):
+        chunk_key = get_file_chunk_path(object_name, part_number)
+        chunk_path = (
+            file_service.storage_root / USER_DATA_BUCKET / chunk_key[:2] / chunk_key
+        )
+        chunk_path.parent.mkdir(parents=True, exist_ok=True)
+        chunk_path.write_bytes(f"chunk {part_number}".encode())
+        chunk_paths.append(chunk_path)
+
+    ttl_seconds = 100
+
+    # Chunk 1 and 2 arrived long enough ago to be individually stale; chunk 3
+    # just arrived (the upload is still actively progressing, just slowly).
+    _age_file(chunk_paths[0], age_seconds=ttl_seconds + 200)
+    _age_file(chunk_paths[1], age_seconds=ttl_seconds + 150)
+    # chunk_paths[2] left fresh (age_seconds=0).
+
+    service = TempStorageCleanupService(
+        file_service, ttl_seconds=ttl_seconds, interval_seconds=86400
+    )
+    result = await service.run_once()
+
+    assert result.chunk_files_removed == 0
+    assert result.total_removed == 0
+    for chunk_path in chunk_paths:
+        assert chunk_path.exists()
+
+
+async def test_removes_whole_abandoned_chunk_set_once_all_stale(
+    tmp_path: Path,
+) -> None:
+    file_service = _make_file_service(tmp_path)
+
+    object_name = "abandoned-upload-name"
+    chunk_paths = []
+    for part_number in (1, 2):
+        chunk_key = get_file_chunk_path(object_name, part_number)
+        chunk_path = (
+            file_service.storage_root / USER_DATA_BUCKET / chunk_key[:2] / chunk_key
+        )
+        chunk_path.parent.mkdir(parents=True, exist_ok=True)
+        chunk_path.write_bytes(f"chunk {part_number}".encode())
+        chunk_paths.append(chunk_path)
+        _age_file(chunk_path, age_seconds=STALE_TTL_SECONDS + 10)
+
+    service = TempStorageCleanupService(
+        file_service, ttl_seconds=STALE_TTL_SECONDS, interval_seconds=86400
+    )
+    result = await service.run_once()
+
+    assert result.chunk_files_removed == 2
+    for chunk_path in chunk_paths:
+        assert not chunk_path.exists()
+
+
 async def test_leaves_fresh_chunk_and_finished_blob_alone(tmp_path: Path) -> None:
     file_service = _make_file_service(tmp_path)
 
@@ -161,6 +230,10 @@ async def test_poll_loop_runs_periodically_and_stops_cleanly(
 
     monkeypatch.setattr(
         "supernote.server.services.temp_cleanup._scan_and_remove_stale",
+        counting_scan,
+    )
+    monkeypatch.setattr(
+        "supernote.server.services.temp_cleanup._scan_and_remove_stale_chunk_sets",
         counting_scan,
     )
 

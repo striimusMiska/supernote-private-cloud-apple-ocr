@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 import re
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -83,6 +85,65 @@ def _scan_and_remove_stale(
     return removed, bytes_freed
 
 
+def _scan_and_remove_stale_chunk_sets(
+    root: Path, name_pattern: re.Pattern[str], cutoff_epoch: float
+) -> tuple[int, int]:
+    """Synchronously remove stale multi-part upload chunk *sets* under `root`.
+
+    Chunks of a single chunked upload share a base name (`get_file_chunk_path()`
+    names each chunk `<object_name>.part.<n>`), and a slow-but-still-progressing
+    upload keeps depositing new chunks under that base as it goes. Judging each
+    chunk file's staleness independently -- the way `_scan_and_remove_stale`
+    judges `.tmp` staging files, which have no siblings -- would let an early
+    chunk go stale and get reaped while later chunks of the *same* upload are
+    still arriving, aborting the merge when the final chunk shows up (#20).
+
+    Chunks are instead grouped by (directory, base name), and a group is only
+    reaped once its *newest* member -- the most recent sign of life for that
+    upload -- is itself older than `cutoff_epoch`.
+
+    Returns (files_removed, bytes_freed).
+    """
+    if not root.exists():
+        return 0, 0
+
+    groups: dict[tuple[Path, str], list[tuple[Path, os.stat_result]]] = defaultdict(
+        list
+    )
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        match = name_pattern.search(path.name)
+        if not match:
+            continue
+        try:
+            stat_result = path.stat()
+        except OSError:
+            # Already gone (e.g. removed by a concurrent run or the request
+            # that owned it finally completing) -- not an error.
+            continue
+        base = path.name[: match.start()]
+        groups[(path.parent, base)].append((path, stat_result))
+
+    removed = 0
+    bytes_freed = 0
+    for members in groups.values():
+        newest_mtime = max(stat_result.st_mtime for _, stat_result in members)
+        if newest_mtime >= cutoff_epoch:
+            continue
+
+        for path, stat_result in members:
+            try:
+                path.unlink()
+            except OSError as e:
+                logger.warning(f"Failed to remove stale temp file {path}: {e}")
+                continue
+            removed += 1
+            bytes_freed += stat_result.st_size
+
+    return removed, bytes_freed
+
+
 class TempStorageCleanupService:
     """Periodically deletes orphaned temp-staging files and abandoned upload chunks.
 
@@ -105,7 +166,10 @@ class TempStorageCleanupService:
     Neither location has a DB record to check for staleness, so both are
     judged purely by filesystem mtime; `ttl_seconds` should be generous
     enough to never catch a write or upload that is merely slow or still in
-    progress.
+    progress. Chunks are judged as a set rather than individually -- a
+    multi-part upload's early chunks are only reaped once its newest chunk is
+    also stale -- so a slow-but-progressing upload isn't disrupted; see
+    `_scan_and_remove_stale_chunk_sets`.
     """
 
     def __init__(
@@ -171,7 +235,10 @@ class TempStorageCleanupService:
 
             chunk_root = self.file_service.storage_root / USER_DATA_BUCKET
             chunk_removed, chunk_bytes = await asyncio.to_thread(
-                _scan_and_remove_stale, chunk_root, _CHUNK_FILE_RE, cutoff_epoch
+                _scan_and_remove_stale_chunk_sets,
+                chunk_root,
+                _CHUNK_FILE_RE,
+                cutoff_epoch,
             )
 
             result = TempCleanupResult(
