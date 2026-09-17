@@ -243,6 +243,35 @@ BaseConfig
     Env Var: `SUPERNOTE_RECYCLE_BIN_CLEANUP_INTERVAL_SECONDS`
     """
 
+    orphan_cleanup_enabled: bool = True
+    """Whether the scheduled orphan/inactive-file cleanup job is enabled.
+
+    When enabled, files/folders that are no longer reachable from an active
+    root folder (because they're individually inactive, or a parent folder
+    is inactive/deleted) have their derived data and, after
+    `orphan_cleanup_retention_days`, their own rows and source blobs
+    permanently removed.
+
+    Env Var: `SUPERNOTE_ORPHAN_CLEANUP_ENABLED`
+    """
+
+    orphan_cleanup_retention_days: int = 30
+    """How many days a file/folder must have been unreachable (inactive, or
+    under an inactive parent) before the scheduled orphan cleanup job
+    permanently removes its derived data, row, and source blob. Operator-
+    defined; adjust to taste. A conservative default avoids racing with sync
+    edge cases.
+
+    Env Var: `SUPERNOTE_ORPHAN_CLEANUP_RETENTION_DAYS`
+    """
+
+    orphan_cleanup_interval_seconds: int = 86400
+    """How often, in seconds, the orphan cleanup job runs. Defaults to once a
+    day.
+
+    Env Var: `SUPERNOTE_ORPHAN_CLEANUP_INTERVAL_SECONDS`
+    """
+
     @property
     def configured_base_url(self) -> str | None:
         """Get the explicitly configured base URL, or None if unset.
@@ -525,6 +554,41 @@ BaseConfig
                 logger.info(
                     "Using SUPERNOTE_RECYCLE_BIN_CLEANUP_INTERVAL_SECONDS: "
                     f"{config.recycle_bin_cleanup_interval_seconds}"
+                )
+            except ValueError:
+                pass
+
+        if os.getenv("SUPERNOTE_ORPHAN_CLEANUP_ENABLED"):
+            config.orphan_cleanup_enabled = _get_bool_env(
+                "SUPERNOTE_ORPHAN_CLEANUP_ENABLED",
+                config.orphan_cleanup_enabled,
+            )
+            logger.info(f"Orphan Cleanup Enabled: {config.orphan_cleanup_enabled}")
+
+        if orphan_cleanup_retention_days := os.getenv(
+            "SUPERNOTE_ORPHAN_CLEANUP_RETENTION_DAYS"
+        ):
+            try:
+                config.orphan_cleanup_retention_days = int(
+                    orphan_cleanup_retention_days
+                )
+                logger.info(
+                    "Using SUPERNOTE_ORPHAN_CLEANUP_RETENTION_DAYS: "
+                    f"{config.orphan_cleanup_retention_days}"
+                )
+            except ValueError:
+                pass
+
+        if orphan_cleanup_interval_seconds := os.getenv(
+            "SUPERNOTE_ORPHAN_CLEANUP_INTERVAL_SECONDS"
+        ):
+            try:
+                config.orphan_cleanup_interval_seconds = int(
+                    orphan_cleanup_interval_seconds
+                )
+                logger.info(
+                    "Using SUPERNOTE_ORPHAN_CLEANUP_INTERVAL_SECONDS: "
+                    f"{config.orphan_cleanup_interval_seconds}"
                 )
             except ValueError:
                 pass

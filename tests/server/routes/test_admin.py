@@ -557,3 +557,78 @@ async def test_admin_recycle_bin_cleanup_run_permission(
 
     resp = await client.post(path, headers=user_headers)
     assert resp.status == 403
+
+
+async def test_admin_orphan_cleanup_run_removes_active_file_under_inactive_folder(
+    client: TestClient,
+    session_manager: DatabaseSessionManager,
+    coordination_service: CoordinationService,
+    server_config: ServerConfig,
+    admin_headers: dict[str, str],
+) -> None:
+    """The manual orphan-cleanup trigger removes a file that's still active
+    but sits under an inactive parent folder, once past retention."""
+    await setup_users(session_manager, coordination_service, server_config)
+    admin_user_id = await _get_admin_user_id(session_manager)
+
+    async with session_manager.session() as session:
+        vfs = VirtualFileSystem(session)
+        folder = await vfs.create_directory(admin_user_id, 0, "Orphaned Folder")
+        note = await vfs.create_or_update_file(
+            admin_user_id,
+            folder.id,
+            "note.note",
+            size=1,
+            md5="h",
+            storage_key="orphan-admin-key",
+        )
+        folder_id = folder.id
+        note_id = note.id
+
+    async with session_manager.session() as session:
+        result = await session.execute(
+            select(UserFileDO).where(UserFileDO.id == folder_id)
+        )
+        folder_do = result.scalar_one()
+        folder_do.is_active = "N"
+        folder_do.update_time -= (
+            (server_config.orphan_cleanup_retention_days + 1) * 86400 * 1000
+        )
+        await session.commit()
+
+    resp = await client.post("/api/admin/orphan-cleanup/run", headers=admin_headers)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["filesRemoved"] == 1
+    assert data["foldersRemoved"] == 1
+
+    async with session_manager.session() as session:
+        result = await session.execute(
+            select(UserFileDO).where(UserFileDO.id == note_id)
+        )
+        assert result.scalar_one_or_none() is None
+
+        result = await session.execute(
+            select(UserFileDO).where(UserFileDO.id == folder_id)
+        )
+        assert result.scalar_one_or_none() is None
+
+
+async def test_admin_orphan_cleanup_run_permission(
+    client: TestClient,
+    session_manager: DatabaseSessionManager,
+    coordination_service: CoordinationService,
+    server_config: ServerConfig,
+    admin_headers: dict[str, str],
+    user_headers: dict[str, str],
+) -> None:
+    """Access control matches other admin routes: 401 anon, 403 non-admin."""
+    await setup_users(session_manager, coordination_service, server_config)
+
+    path = "/api/admin/orphan-cleanup/run"
+
+    resp = await client.post(path)
+    assert resp.status == 401
+
+    resp = await client.post(path, headers=user_headers)
+    assert resp.status == 403
