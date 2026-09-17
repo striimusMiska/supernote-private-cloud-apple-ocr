@@ -13,6 +13,7 @@ from supernote.models.base import (
 )
 from supernote.models.extended import (
     HermesSummaryRetryVO,
+    OrphanCleanupRunVO,
     RecycleBinCleanupRunVO,
     SystemTaskVO,
     TempCleanupRunVO,
@@ -233,6 +234,34 @@ async def handle_recycle_bin_cleanup_run(request: web.Request) -> web.Response:
     purged_count = await recycle_bin_cleanup_service.run_once()
     return web.json_response(
         RecycleBinCleanupRunVO(purged_count=purged_count).to_dict()
+    )
+
+
+@routes.post("/api/admin/orphan-cleanup/run")
+@require_admin
+async def handle_orphan_cleanup_run(request: web.Request) -> web.Response:
+    """Manually run the orphan cleanup job now (Admin only).
+
+    Permanently removes derived data (and, past the retention window, rows
+    and source blobs) for files/folders no longer reachable from an active
+    root -- either because they're individually inactive, or because a
+    parent folder is inactive/deleted -- rather than waiting for the next
+    scheduled run.
+    """
+    orphan_cleanup_service = request.app["orphan_cleanup_service"]
+    stats = await orphan_cleanup_service.run_once()
+    return web.json_response(
+        OrphanCleanupRunVO(
+            files_removed=stats.files_removed,
+            folders_removed=stats.folders_removed,
+            note_page_content_removed=stats.note_page_content_removed,
+            system_tasks_removed=stats.system_tasks_removed,
+            summaries_removed=stats.summaries_removed,
+            png_blobs_removed=stats.png_blobs_removed,
+            source_blobs_removed=stats.source_blobs_removed,
+            stale_files_found=stats.stale_files_found,
+            stale_folders_found=stats.stale_folders_found,
+        ).to_dict()
     )
 
 

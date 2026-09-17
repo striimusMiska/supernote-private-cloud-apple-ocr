@@ -99,6 +99,24 @@ RECYCLE_BIN_CLEANUP_DURATION_SECONDS: Histogram = Histogram(
     "Latency of recycle bin cleanup job runs in seconds.",
 )
 
+# Orphan (inactive/unreachable file) cleanup metrics
+ORPHAN_CLEANUP_RUNS_TOTAL: Counter = Counter(
+    "supernote_orphan_cleanup_runs_total",
+    "Total number of scheduled orphan cleanup job runs.",
+    ["status"],
+)
+
+ORPHAN_CLEANUP_ITEMS_REMOVED_TOTAL: Counter = Counter(
+    "supernote_orphan_cleanup_items_removed_total",
+    "Total number of rows/blobs permanently removed by the orphan cleanup job.",
+    ["artifact_type"],
+)
+
+ORPHAN_CLEANUP_DURATION_SECONDS: Histogram = Histogram(
+    "supernote_orphan_cleanup_duration_seconds",
+    "Latency of orphan cleanup job runs in seconds.",
+)
+
 # Temp storage cleanup metrics
 TEMP_CLEANUP_RUNS_TOTAL: Counter = Counter(
     "supernote_temp_cleanup_runs_total",

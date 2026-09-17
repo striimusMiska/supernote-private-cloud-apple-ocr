@@ -47,6 +47,7 @@ from .services.file import FileService
 from .services.gemini import GeminiService
 from .services.hermes_summary import HermesSummaryService
 from .services.ollama import OllamaService
+from .services.orphan_cleanup import OrphanCleanupService
 from .services.processor import ProcessorService
 from .services.processor_modules.apple_vision_ocr import AppleVisionOcrModule
 
@@ -412,6 +413,15 @@ def create_app(config: ServerConfig) -> web.Application:
     )
     app["recycle_bin_cleanup_service"] = recycle_bin_cleanup_service
 
+    orphan_cleanup_service = OrphanCleanupService(
+        session_manager,
+        blob_storage,
+        retention_days=config.orphan_cleanup_retention_days,
+        interval_seconds=config.orphan_cleanup_interval_seconds,
+        enabled=config.orphan_cleanup_enabled,
+    )
+    app["orphan_cleanup_service"] = orphan_cleanup_service
+
     temp_cleanup_service = TempStorageCleanupService(
         file_service,
         ttl_seconds=config.temp_cleanup_ttl_seconds,
@@ -534,6 +544,7 @@ def create_app(config: ServerConfig) -> web.Application:
         logger.info("Starting background services...")
         await processor_service.start()
         await recycle_bin_cleanup_service.start()
+        await orphan_cleanup_service.start()
         await temp_cleanup_service.start()
         logger.info("Startup sequence complete.")
 
@@ -551,6 +562,7 @@ def create_app(config: ServerConfig) -> web.Application:
 
         await processor_service.stop()
         await recycle_bin_cleanup_service.stop()
+        await orphan_cleanup_service.stop()
         await temp_cleanup_service.stop()
         await session_manager.close()
 

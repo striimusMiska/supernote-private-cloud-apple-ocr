@@ -129,6 +129,60 @@ class RecycleBinCleanupRunVO(BaseResponse):
 
 
 @dataclass(kw_only=True)
+class OrphanCleanupRunVO(BaseResponse):
+    """Response VO for the admin manual orphan cleanup trigger endpoint.
+
+    Used by: POST /api/admin/orphan-cleanup/run
+    """
+
+    files_removed: int = field(metadata=field_options(alias="filesRemoved"), default=0)
+    """Number of stale files permanently removed by this run."""
+
+    folders_removed: int = field(
+        metadata=field_options(alias="foldersRemoved"), default=0
+    )
+    """Number of stale folders permanently removed by this run."""
+
+    note_page_content_removed: int = field(
+        metadata=field_options(alias="notePageContentRemoved"), default=0
+    )
+    """Number of `f_note_page_content` rows removed by this run."""
+
+    system_tasks_removed: int = field(
+        metadata=field_options(alias="systemTasksRemoved"), default=0
+    )
+    """Number of `f_system_task` rows removed by this run."""
+
+    summaries_removed: int = field(
+        metadata=field_options(alias="summariesRemoved"), default=0
+    )
+    """Number of `f_summary` rows removed by this run."""
+
+    png_blobs_removed: int = field(
+        metadata=field_options(alias="pngBlobsRemoved"), default=0
+    )
+    """Number of cached PNG conversion blobs removed by this run."""
+
+    source_blobs_removed: int = field(
+        metadata=field_options(alias="sourceBlobsRemoved"), default=0
+    )
+    """Number of original source blobs removed by this run."""
+
+    stale_files_found: int = field(
+        metadata=field_options(alias="staleFilesFound"), default=0
+    )
+    """Total stale files found (unreachable), regardless of retention window."""
+
+    stale_folders_found: int = field(
+        metadata=field_options(alias="staleFoldersFound"), default=0
+    )
+    """Total stale folders found (unreachable), regardless of retention window."""
+
+    class Config(BaseConfig):
+        serialize_by_alias = True
+
+
+@dataclass(kw_only=True)
 class TempCleanupRunVO(BaseResponse):
     """Response VO for the admin manual temp storage cleanup trigger endpoint.
 
