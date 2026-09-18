@@ -162,3 +162,6 @@ private/
 # Local agent instructions and state (not for the public repo)
 CLAUDE.md
 .claude/
+
+# Scratch space for local-only test files (real device samples, etc.) - never committed
+test-temp-delete-when-done/
