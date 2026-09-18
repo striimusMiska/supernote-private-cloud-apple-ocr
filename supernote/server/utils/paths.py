@@ -44,6 +44,16 @@ def get_conversion_pdf_path(user_id: int, file_id: int, file_md5: str) -> str:
     return f"conversions/{user_id}/{file_id}/note_{file_md5}.pdf"
 
 
+def get_spd_conversion_png_path(user_id: int, file_id: int, file_md5: str) -> str:
+    """Generate a storage path for a converted .spd PNG."""
+    return f"conversions/{user_id}/{file_id}/spd_{file_md5}.png"
+
+
+def get_spd_conversion_pdf_path(user_id: int, file_id: int, file_md5: str) -> str:
+    """Generate a storage path for a converted .spd PDF."""
+    return f"conversions/{user_id}/{file_id}/spd_{file_md5}.pdf"
+
+
 def generate_inner_name(filename: str, equipment_no: str | None) -> str:
     """Generate a system-of-record inner name.
 

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import tempfile
 import time
 from dataclasses import dataclass
 from io import BytesIO
@@ -34,7 +35,11 @@ from supernote.server.utils.paths import (
     get_conversion_pdf_path,
     get_conversion_png_path,
     get_page_png_path,
+    get_spd_conversion_pdf_path,
+    get_spd_conversion_png_path,
 )
+from supernote.spd.converter import convert_to_pdf_bytes, convert_to_png_bytes
+from supernote.spd.exceptions import SpdError
 
 from ..db.models.file import RecycleFileDO, UserFileDO
 from ..db.models.note_processing import NotePageContentDO
@@ -175,6 +180,22 @@ def _convert_note_to_pdf_sync(blob_content: bytes, page_no_list: list[int]) -> b
     note = load_notebook(BytesIO(blob_content), policy="loose")
     converter = PdfConverter(note)
     return converter.convert(page_no_list if page_no_list else -1)
+
+
+def _convert_spd_to_png_sync(blob_content: bytes) -> bytes:
+    """Helper to write .spd bytes to a temp file and render PNG in a worker thread."""
+    with tempfile.NamedTemporaryFile(suffix=".spd") as tmp:
+        tmp.write(blob_content)
+        tmp.flush()
+        return convert_to_png_bytes(tmp.name)
+
+
+def _convert_spd_to_pdf_sync(blob_content: bytes) -> bytes:
+    """Helper to write .spd bytes to a temp file and render PDF in a worker thread."""
+    with tempfile.NamedTemporaryFile(suffix=".spd") as tmp:
+        tmp.write(blob_content)
+        tmp.flush()
+        return convert_to_pdf_bytes(tmp.name)
 
 
 class FileService:
@@ -1148,6 +1169,84 @@ class FileService:
             pdf_storage_key = get_conversion_pdf_path(
                 user_id=user_id, file_id=file_id, file_md5=node.md5
             )
+            await self.blob_storage.put(USER_DATA_BUCKET, pdf_storage_key, pdf_bytes)
+
+            return pdf_storage_key
+
+    async def convert_spd_to_png(self, user: str, file_id: int) -> ConversionsVO:
+        """Convert a .spd drawing to a single PNG page."""
+        user_id = await self.user_service.get_user_id(user)
+        async with self.session_manager.session() as session:
+            vfs = VirtualFileSystem(session)
+            node = await vfs.get_node_by_id(user_id, file_id)
+            if not node or node.is_folder == "Y":
+                raise FileNotFound(f"SPD file {file_id} not found")
+            if not node.md5:
+                raise FileError(f"SPD file {file_id} is missing MD5 hash")
+
+            png_storage_key = get_spd_conversion_png_path(
+                user_id=user_id, file_id=file_id, file_md5=node.md5
+            )
+
+            if await self.blob_storage.exists(USER_DATA_BUCKET, png_storage_key):
+                return ConversionsVO(storage_key=png_storage_key, page_no=0)
+
+            if node.storage_key is None:
+                raise FileNotFound(f"SPD file {file_id} has no content")
+
+            blob_content = b"".join(
+                [
+                    chunk
+                    async for chunk in self.blob_storage.get(
+                        USER_DATA_BUCKET, node.storage_key
+                    )
+                ]
+            )
+
+            try:
+                png_bytes = await asyncio.to_thread(
+                    _convert_spd_to_png_sync, blob_content
+                )
+            except SpdError as exc:
+                raise FileError(f"Could not render SPD file {file_id}: {exc}") from exc
+
+            await self.blob_storage.put(USER_DATA_BUCKET, png_storage_key, png_bytes)
+
+            return ConversionsVO(storage_key=png_storage_key, page_no=0)
+
+    async def convert_spd_to_pdf(self, user: str, file_id: int) -> str:
+        """Convert a .spd drawing to a single-page PDF."""
+        user_id = await self.user_service.get_user_id(user)
+        async with self.session_manager.session() as session:
+            vfs = VirtualFileSystem(session)
+            node = await vfs.get_node_by_id(user_id, file_id)
+            if not node or node.is_folder == "Y":
+                raise FileNotFound(f"SPD file {file_id} not found")
+            if not node.md5:
+                raise FileError(f"SPD file {file_id} is missing MD5 hash")
+            if node.storage_key is None:
+                raise FileNotFound(f"SPD file {file_id} has no content")
+
+            pdf_storage_key = get_spd_conversion_pdf_path(
+                user_id=user_id, file_id=file_id, file_md5=node.md5
+            )
+
+            blob_content = b"".join(
+                [
+                    chunk
+                    async for chunk in self.blob_storage.get(
+                        USER_DATA_BUCKET, node.storage_key
+                    )
+                ]
+            )
+
+            try:
+                pdf_bytes = await asyncio.to_thread(
+                    _convert_spd_to_pdf_sync, blob_content
+                )
+            except SpdError as exc:
+                raise FileError(f"Could not render SPD file {file_id}: {exc}") from exc
+
             await self.blob_storage.put(USER_DATA_BUCKET, pdf_storage_key, pdf_bytes)
 
             return pdf_storage_key

@@ -1,5 +1,5 @@
 import { ref, onMounted } from 'vue';
-import { convertNoteToPng } from '../api/client.js';
+import { convertNoteToPng, convertSpdToPng } from '../api/client.js';
 
 export default {
     props: ['file', 'isSelected', 'processingStatus'],
@@ -11,6 +11,15 @@ export default {
             if (props.file && props.file.extension === 'note') {
                 try {
                     const pages = await convertNoteToPng(props.file.id);
+                    if (pages && pages.length > 0) {
+                        coverUrl.value = pages[0].url;
+                    }
+                } catch (e) {
+                    // Fallback to vector icon
+                }
+            } else if (props.file && props.file.extension === 'spd') {
+                try {
+                    const pages = await convertSpdToPng(props.file.id);
                     if (pages && pages.length > 0) {
                         coverUrl.value = pages[0].url;
                     }
@@ -60,6 +69,11 @@ export default {
                 <!-- Notebook File Icon -->
                 <div v-else-if="file.extension === 'note'" class="p-3 bg-white/90 dark:bg-slate-800/90 backdrop-blur rounded-xl shadow-sm border border-white/50 dark:border-slate-700">
                     <svg class="w-8 h-8 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                </div>
+
+                <!-- Drawing (SPD) File Icon -->
+                <div v-else-if="file.extension === 'spd'" class="p-3 bg-white/90 dark:bg-slate-800/90 backdrop-blur rounded-xl shadow-sm border border-white/50 dark:border-slate-700">
+                    <svg class="w-8 h-8 text-pink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.5 4.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L15.5 4.5z"></path></svg>
                 </div>
 
                 <!-- Generic File Icon -->
