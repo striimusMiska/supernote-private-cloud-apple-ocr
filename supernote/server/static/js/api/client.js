@@ -173,6 +173,84 @@ export async function convertNoteToPng(fileId) {
 }
 
 /**
+ * Convert SPD (drawing) to PNG
+ * @param {string} fileId
+ * @returns {Promise<Array<{pageNo: number, url: string}>>}
+ */
+export async function convertSpdToPng(fileId) {
+    // 1. Get Token
+    const currentToken = getToken();
+    if (!currentToken) throw new Error("Unauthorized");
+
+    // 2. Call API
+    const response = await fetch('/api/file/spd/to/png', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-access-token': currentToken
+        },
+        body: JSON.stringify({ id: fileId }) // Pass as string to preserve 64-bit precision
+    });
+
+    if (!response.ok) {
+        if (response.status === 401) {
+            logout();
+            throw new Error("Unauthorized");
+        }
+        let errorMsg = response.statusText;
+        try {
+            const data = await response.json();
+            errorMsg = data?.errorMsg || errorMsg;
+        } catch (e) {
+            // Body wasn't valid JSON; fall back to statusText
+        }
+        throw new Error(errorMsg);
+    }
+
+    const data = await response.json();
+    return data.pngPageVOList || [];
+}
+
+/**
+ * Convert SPD (drawing) to PDF
+ * @param {string} fileId
+ * @returns {Promise<string>}
+ */
+export async function convertSpdToPdf(fileId) {
+    // 1. Get Token
+    const currentToken = getToken();
+    if (!currentToken) throw new Error("Unauthorized");
+
+    // 2. Call API
+    const response = await fetch('/api/file/spd/to/pdf', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-access-token': currentToken
+        },
+        body: JSON.stringify({ id: fileId }) // Pass as string to preserve 64-bit precision
+    });
+
+    if (!response.ok) {
+        if (response.status === 401) {
+            logout();
+            throw new Error("Unauthorized");
+        }
+        let errorMsg = response.statusText;
+        try {
+            const data = await response.json();
+            errorMsg = data?.errorMsg || errorMsg;
+        } catch (e) {
+            // Body wasn't valid JSON; fall back to statusText
+        }
+        throw new Error(errorMsg);
+    }
+
+    const data = await response.json();
+    return data.url;
+}
+
+/**
  * Fetch transcript for a notebook file.
  */
 export async function fetchTranscript(fileId) {

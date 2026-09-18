@@ -1,5 +1,5 @@
 import { ref, computed, onMounted, watch } from 'vue';
-import { convertNoteToPng, fetchTranscript, fetchSummaries } from '../api/client.js';
+import { convertNoteToPng, convertSpdToPng, convertSpdToPdf, fetchTranscript, fetchSummaries } from '../api/client.js';
 
 export default {
     name: 'FileViewer',
@@ -16,42 +16,56 @@ export default {
         const realSummaries = ref([]);
         const isLoadingTranscript = ref(false);
 
+        const isDownloadingPng = ref(false);
+        const isDownloadingPdf = ref(false);
+        const downloadError = ref(null);
+
         const loadNoteContent = async () => {
             if (!props.file) return;
 
             isLoading.value = true;
             error.value = null;
+            downloadError.value = null;
 
             try {
                 // Fetch page PNGs
                 if (props.file.extension === 'note') {
                     const pngPages = await convertNoteToPng(props.file.id);
                     pages.value = pngPages;
+                } else if (props.file.extension === 'spd') {
+                    const pngPages = await convertSpdToPng(props.file.id);
+                    pages.value = pngPages;
                 } else {
                     error.value = "Preview not available for this file type.";
                 }
 
-                // Fetch real OCR transcript & summaries from extended APIs
-                isLoadingTranscript.value = true;
-                const [transcriptData, summariesData] = await Promise.all([
-                    fetchTranscript(props.file.id).catch(() => null),
-                    fetchSummaries(props.file.id).catch(() => [])
-                ]);
+                // Fetch real OCR transcript & summaries from extended APIs (notebooks only)
+                if (props.file.extension === 'note') {
+                    isLoadingTranscript.value = true;
+                    const [transcriptData, summariesData] = await Promise.all([
+                        fetchTranscript(props.file.id).catch(() => null),
+                        fetchSummaries(props.file.id).catch(() => [])
+                    ]);
 
-                if (typeof transcriptData === 'string') {
-                    realTranscript.value = transcriptData;
-                } else if (transcriptData && (transcriptData.transcript || transcriptData.text)) {
-                    realTranscript.value = transcriptData.transcript || transcriptData.text;
-                } else {
-                    realTranscript.value = '';
-                }
+                    if (typeof transcriptData === 'string') {
+                        realTranscript.value = transcriptData;
+                    } else if (transcriptData && (transcriptData.transcript || transcriptData.text)) {
+                        realTranscript.value = transcriptData.transcript || transcriptData.text;
+                    } else {
+                        realTranscript.value = '';
+                    }
 
-                if (summariesData && Array.isArray(summariesData)) {
-                    realSummaries.value = summariesData.filter(s => (s.dataSource || '').toUpperCase() !== 'OCR');
+                    if (summariesData && Array.isArray(summariesData)) {
+                        realSummaries.value = summariesData.filter(s => (s.dataSource || '').toUpperCase() !== 'OCR');
+                    }
                 }
             } catch (e) {
                 console.error("Failed to load notebook content:", e);
-                error.value = "Failed to render notebook pages.";
+                if (props.file.extension === 'spd') {
+                    error.value = e.message || "Failed to render drawing.";
+                } else {
+                    error.value = "Failed to render notebook pages.";
+                }
             } finally {
                 isLoading.value = false;
                 isLoadingTranscript.value = false;
@@ -68,6 +82,47 @@ export default {
             return str.replaceAll('\\n', '\n');
         };
 
+        const triggerDownload = (url, filename) => {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        };
+
+        const downloadSpdPng = async () => {
+            if (!props.file) return;
+            downloadError.value = null;
+            isDownloadingPng.value = true;
+            try {
+                const pngPages = await convertSpdToPng(props.file.id);
+                if (pngPages && pngPages.length > 0) {
+                    const baseName = props.file.name ? props.file.name.replace(/\.spd$/i, '') : 'drawing';
+                    triggerDownload(pngPages[0].url, `${baseName}.png`);
+                }
+            } catch (e) {
+                downloadError.value = e.message || "Failed to download PNG.";
+            } finally {
+                isDownloadingPng.value = false;
+            }
+        };
+
+        const downloadSpdPdf = async () => {
+            if (!props.file) return;
+            downloadError.value = null;
+            isDownloadingPdf.value = true;
+            try {
+                const url = await convertSpdToPdf(props.file.id);
+                const baseName = props.file.name ? props.file.name.replace(/\.spd$/i, '') : 'drawing';
+                triggerDownload(url, `${baseName}.pdf`);
+            } catch (e) {
+                downloadError.value = e.message || "Failed to download PDF.";
+            } finally {
+                isDownloadingPdf.value = false;
+            }
+        };
+
         return {
             pages,
             isLoading,
@@ -77,7 +132,12 @@ export default {
             isMobileSidePanelOpen,
             realTranscript,
             realSummaries,
-            formatContent
+            formatContent,
+            isDownloadingPng,
+            isDownloadingPdf,
+            downloadError,
+            downloadSpdPng,
+            downloadSpdPdf
         };
     },
     template: `
@@ -92,8 +152,18 @@ export default {
                     <h3 class="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">{{ file?.name || 'Notebook Viewer' }}</h3>
                     <p class="text-[11px] text-slate-400 font-mono">ID: {{ file?.id }}</p>
                 </div>
+                <div v-if="file?.extension === 'spd'" class="flex items-center space-x-2 flex-none">
+                    <button @click="downloadSpdPng" :disabled="isDownloadingPng"
+                        class="px-3 py-1.5 bg-pink-50 dark:bg-pink-950/60 text-pink-600 dark:text-pink-400 rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+                        {{ isDownloadingPng ? 'Downloading…' : 'Download PNG' }}
+                    </button>
+                    <button @click="downloadSpdPdf" :disabled="isDownloadingPdf"
+                        class="px-3 py-1.5 bg-pink-50 dark:bg-pink-950/60 text-pink-600 dark:text-pink-400 rounded-lg text-xs font-semibold disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">
+                        {{ isDownloadingPdf ? 'Downloading…' : 'Download PDF' }}
+                    </button>
+                </div>
             </div>
-            <button @click="isMobileSidePanelOpen = !isMobileSidePanelOpen" class="md:hidden px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 rounded-lg text-xs font-semibold">
+            <button v-if="file?.extension === 'note'" @click="isMobileSidePanelOpen = !isMobileSidePanelOpen" class="md:hidden px-3 py-1.5 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 rounded-lg text-xs font-semibold">
                 {{ isMobileSidePanelOpen ? 'Hide Insights' : 'Show Insights' }}
             </button>
         </div>
@@ -102,6 +172,10 @@ export default {
         <div class="flex-1 flex overflow-hidden relative">
             <!-- Left Pane: Canvas Pages -->
             <div class="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+                <div v-if="downloadError" class="bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 p-3 rounded-xl text-center text-xs text-red-700 dark:text-red-400 max-w-md mx-auto mb-4">
+                    {{ downloadError }}
+                </div>
+
                 <div v-if="isLoading" class="flex flex-col items-center justify-center py-20 space-y-3">
                     <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
                     <p class="text-xs text-slate-400 font-mono">Converting notebook vector pages to HD PNG...</p>
@@ -124,10 +198,10 @@ export default {
             </div>
 
             <!-- Mobile Overlay Drawer Backdrop -->
-            <div v-if="isMobileSidePanelOpen" @click="isMobileSidePanelOpen = false" class="fixed inset-0 z-30 bg-black/30 md:hidden"></div>
+            <div v-if="file?.extension === 'note' && isMobileSidePanelOpen" @click="isMobileSidePanelOpen = false" class="fixed inset-0 z-30 bg-black/30 md:hidden"></div>
 
             <!-- Right Pane: Real OCR Transcript & Summaries -->
-            <div :class="isMobileSidePanelOpen ? 'translate-y-0' : 'translate-y-full md:translate-y-0'"
+            <div v-if="file?.extension === 'note'" :class="isMobileSidePanelOpen ? 'translate-y-0' : 'translate-y-full md:translate-y-0'"
                 class="fixed md:static inset-x-0 bottom-0 z-40 md:z-10 h-[65vh] md:h-full w-full md:w-80 lg:w-96 border-t md:border-t-0 md:border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col shadow-2xl md:shadow-none transition-transform duration-200 ease-in-out flex-shrink-0 rounded-t-2xl md:rounded-none">
 
                 <!-- Workspace Tab Selector & Mobile Handle -->

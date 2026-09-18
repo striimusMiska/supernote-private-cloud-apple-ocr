@@ -595,3 +595,50 @@ async def handle_note_to_pdf(request: web.Request) -> web.Response:
         return err.to_response()
     except Exception as err:
         return SupernoteError.uncaught(err).to_response()
+
+
+@routes.post("/api/file/spd/to/png")
+async def handle_spd_to_png(request: web.Request) -> web.Response:
+    # Endpoint: POST /api/file/spd/to/png
+    # Purpose: Convert a .spd drawing to PNG.
+    # Response: PngVO
+    req_data = PngDTO.from_dict(await request.json())
+    user_email = request["user"]
+    file_service: FileService = request.app["file_service"]
+    url_signer: UrlSigner = request.app["url_signer"]
+
+    try:
+        result = await file_service.convert_spd_to_png(user_email, req_data.id)
+        base_url = get_request_base_url(request)
+        path_to_sign = f"/api/oss/download?path={result.storage_key}"
+        signed_path = await url_signer.sign(path_to_sign, user=user_email)
+        download_url = f"{base_url}{signed_path}"
+        png_pages = [PngPageVO(page_no=result.page_no, url=download_url)]
+        return web.json_response(PngVO(png_page_vo_list=png_pages).to_dict())
+    except SupernoteError as err:
+        return err.to_response()
+    except Exception as err:
+        return SupernoteError.uncaught(err).to_response()
+
+
+@routes.post("/api/file/spd/to/pdf")
+async def handle_spd_to_pdf(request: web.Request) -> web.Response:
+    # Endpoint: POST /api/file/spd/to/pdf
+    # Purpose: Convert a .spd drawing to PDF.
+    # Response: PdfVO
+    req_data = PdfDTO.from_dict(await request.json())
+    user_email = request["user"]
+    file_service: FileService = request.app["file_service"]
+    url_signer: UrlSigner = request.app["url_signer"]
+
+    try:
+        storage_key = await file_service.convert_spd_to_pdf(user_email, req_data.id)
+        path_to_sign = f"/api/oss/download?path={storage_key}"
+        signed_path = await url_signer.sign(path_to_sign, user=user_email)
+        base_url = get_request_base_url(request)
+        download_url = f"{base_url}{signed_path}"
+        return web.json_response(PdfVO(url=download_url).to_dict())
+    except SupernoteError as err:
+        return err.to_response()
+    except Exception as err:
+        return SupernoteError.uncaught(err).to_response()
